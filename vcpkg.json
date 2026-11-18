@@ -1,0 +1,10 @@
+{
+  "name": "ptu-campus-net-login",
+  "version-string": "0.0.1",
+  "dependencies": [
+    {
+      "name": "tesseract",
+      "default-features": false
+    }
+  ]
+}

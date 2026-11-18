@@ -1,0 +1,7 @@
+{
+  "default-registry": {
+    "kind": "git",
+    "repository": "https://gh-proxy.org/https://github.com/microsoft/vcpkg",
+    "baseline": "8f363bdc11359ede4bc51e5eb32a2617538049c8"
+  }
+}
