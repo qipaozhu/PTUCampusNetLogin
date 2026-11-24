@@ -13,6 +13,10 @@ class QTimer;
 ///   - 网卡从断开变成连上（睡醒后 Wi-Fi 刚关联好）
 /// 失败后按 30s / 60s / 2min / 5min 退避重试，5 分钟一档一直重复；
 /// 任意一次成功、或者用户手动停止 / 注销，都会清空重试状态。
+///
+/// 例外：如果失败原因是「不是本校校园网」（PortalLogin::pendingManualAuth），
+/// 说明这个网络根本不需要本校认证，重试没有意义，直接停止，
+/// 等网络环境变化（换网 / 重新连上）再试。
 class AutoReconnect : public QObject
 {
 	Q_OBJECT

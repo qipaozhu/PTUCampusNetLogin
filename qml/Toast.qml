@@ -12,7 +12,8 @@ ApplicationWindow {
 
     // 接近 Windows 通知卡片的大小
     readonly property int cardWidth: 380
-    readonly property int cardHeight: 104
+    // 高度跟着正文行数走：正文最多两行，短消息不会白占一大块
+    readonly property int cardHeight: Math.max(104, textColumn.implicitHeight + 32)
 
     // 窗口比卡片宽出 marginRight：卡片向右滑出时正好消失在屏幕右边缘
     width: cardWidth + marginRight
@@ -38,9 +39,9 @@ ApplicationWindow {
     readonly property color spinnerTrack: dark ? "#33FFFFFF" : "#22000000"
     readonly property color hoverSoft: systemTheme.hoverSoft
 
-    // 用户点了关闭按钮；真正的销毁交给 main.qml 的 root
+    // 用户点了关闭按钮；真正的销毁交给 ToastCenter
     signal closeRequested()
-    // 退出动画播完了，root 可以安全销毁这个窗口
+    // 退出动画播完了，ToastCenter 可以安全销毁这个窗口
     signal dismissed()
 
     // 已经在播放退出动画，避免重复触发
@@ -62,24 +63,47 @@ ApplicationWindow {
     x: Screen.width - width
     y: Screen.height - height - marginBottom
 
-    // 由 main.qml 的 root.showToast() 调用：刷新状态、显示并播放入场动画
-    function present(newStatus) {
+    // 窗口是否已经处于显示状态：决定这一次要不要播入场动画
+    property bool shown: false
+
+    /// 非空时覆盖正文：测试页用它塞超长文案进来验证两行排版
+    property string messageOverride: ""
+
+    // 由 ToastCenter 调用。界面上本来就有 toast 时只更新内容，
+    // 不再播入场动画——否则「处理中 → 成功」会再弹一次，看起来像闪了一下
+    function present(newStatus, message) {
+        const firstTime = !shown;
+        const statusChanged = toast.status !== newStatus;
+
         exitAnim.stop();
         dismissing = false;
         toast.status = newStatus;
-        // 先摆到入场动画的起点，避免窗口出现的第一帧闪一下
-        card.x = 40;
-        card.opacity = 0;
-        show();
+        toast.messageOverride = (message === undefined || message === null) ? "" : message;
+
+        if (firstTime) {
+            // 先摆到入场动画的起点，避免窗口出现的第一帧闪一下
+            card.x = 40;
+            card.opacity = 0;
+            shown = true;
+            show();
+            raise();
+            enterAnim.restart();
+            return;
+        }
+
+        // 已经显示：保持当前位置，只让内容淡一下表示更新
         raise();
-        enterAnim.restart();
+        if (statusChanged && !enterAnim.running)
+            contentFade.restart();
     }
 
-    // 由 main.qml 的 root.hideToast() 调用：右滑退出，结束后发 dismissed 让 root 销毁
+    // 由 ToastCenter 调用：右滑退出，结束后发 dismissed 让它销毁窗口
     function dismiss() {
         if (dismissing)
             return;
+
         dismissing = true;
+        shown = false;
         enterAnim.stop();
         exitAnim.restart();
     }
@@ -142,6 +166,27 @@ ApplicationWindow {
         }
     }
 
+    // 已经显示时状态变化：内容轻轻淡一下，代替重播入场动画
+    SequentialAnimation {
+        id: contentFade
+
+        NumberAnimation {
+            target: contentRoot
+            property: "opacity"
+            to: 0.35
+            duration: 90
+            easing.type: Easing.OutQuad
+        }
+
+        NumberAnimation {
+            target: contentRoot
+            property: "opacity"
+            to: 1.0
+            duration: 160
+            easing.type: Easing.OutQuad
+        }
+    }
+
     onDarkChanged: {
         spinner.requestPaint();
         checkMark.requestPaint();
@@ -181,6 +226,7 @@ ApplicationWindow {
         }
 
         Item {
+            id: contentRoot
             anchors.fill: parent
             anchors.margins: 16
             // 退出动画期间不再响应点击
@@ -293,6 +339,7 @@ ApplicationWindow {
             }
 
             Column {
+                id: textColumn
                 anchors.left: iconPlaceholder.right
                 anchors.leftMargin: 14
                 // 右侧给关闭按钮留出位置，避免文字被按钮压住
@@ -317,18 +364,27 @@ ApplicationWindow {
 
                 // 内容 / 状态：失败时直接显示登录流程给出的原因
                 // （没连网、验证码识别失败、非校园网……）
+                // 最多两行：再长就省略号收尾，卡片高度会自动跟上
                 Text {
                     width: parent.width
-                    text: toast.failed
-                        ? (typeof portal !== "undefined" && portal.message.length > 0
-                            ? portal.message
-                            : "需要手动操作，请打开浏览器完成认证")
-                        : toast.success
-                            ? "认证完成，已可正常上网"
-                            : "正在登录莆田学院校园网"
+                    text: {
+                        if (toast.messageOverride.length > 0)
+                            return toast.messageOverride;
+
+                        if (toast.failed) {
+                            if (typeof portal !== "undefined" && portal.message.length > 0)
+                                return portal.message;
+                            return "请打开浏览器完成认证";
+                        }
+
+                        return toast.success ? "认证完成，已可正常上网" : "正在登录莆田学院校园网";
+                    }
                     color: toast.contentColor
                     font.pixelSize: 13
+                    wrapMode: Text.WordWrap
+                    maximumLineCount: 2
                     elide: Text.ElideRight
+                    lineHeight: 1.15
                 }
             }
 

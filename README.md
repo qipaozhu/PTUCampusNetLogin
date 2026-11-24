@@ -10,7 +10,7 @@
 
 ## 功能
 - **自动登录**：开机自启动后由程序后台直接执行一次认证，**不弹出主界面**，只在右下角用 Toast 显示进度和结果；需要操作时从托盘打开界面，或者在主页手动点「登录」。
-- **掉线自动重连**：已经认证过之后网络断开（锁屏睡眠唤醒、Wi-Fi 重连、会话过期），程序会自动在后台重新认证，失败按 30s / 1min / 2min / 5min 退避重试，过程中不弹浏览器，登录进度和结果照常用右下角 Toast 提示。
+- **掉线自动重连**：已经认证过之后网络断开（锁屏睡眠唤醒、Wi-Fi 重连、会话过期），程序会自动在后台重新认证，失败按 30s / 1min / 2min / 5min 退避重试，登录进度和结果照常用右下角 Toast 提示。如果判断当前网络不是本校校园网（酒店、机场、别的学校），会自动打开浏览器让你手动认证，并**停止自动重试**，不会反复弹窗。
 - **验证码识别**：本地用 Tesseract OCR 识别 ePortal 验证码，不需要联网识别；找不到 Tesseract 时自动退化成手动。
 - **状态提示**：登录中 / 成功 / 失败用右下角 Toast 提示，带滑入滑出动画，失败和成功时可以手动关掉。
 - **常驻托盘**：关闭主窗口不会退出程序，从托盘菜单可以重新打开界面或彻底退出。
@@ -48,17 +48,26 @@
 密码只做了 Base64 编码，**不是加密**，请不要在公共电脑上保存账号密码。
 
 ## 项目结构
+```text
+app/            入口和桌面集成：main.cpp / appshell（图标字体窗口）/ tray（托盘）/ startupdiag（启动诊断）
+src/platform/   所有平台相关代码：platform（权限 / 路由 / 自启动 / 主题 / 提权）、winregistry（注册表）、
+                ncsiprobing（NCSI 组策略）、powerwatcher（睡眠恢复）
+src/utils/      跨平台纯工具：textutils / portaladdress / jsonpresult / captchaimage / applog
+src/net/         network（网络检测）、lanprobe（默认路由所在网卡探测）
+src/core/        controller（配置与系统设置）、singleinstance、loginstate（状态文案）、startupcoordinator（启动决策）
+src/portal/      portalclient（Portal 协议：URL / 请求 / JSONP）、portallogin（登录状态机）、
+                 autoreconnect（掉线自动重连）、captchaocr（验证码识别）
+src/ui/          systemtheme（深浅色 + 配色）
+qml/             main / SettingsPage / TestPage / Toast / ToastCenter（编译进 exe 的 qrc）
+resources/       图标、字体、logo、resources.qrc、windows.rc
+cmake/           tesseract.cmake（可选的 OCR 依赖）
+CMakeLists.txt   构建脚本
+BUILD.md         构建、运行、发布说明
+AGENT.md         项目总览与开发约定（专题文档在 agent/ 下）
 ```
-app/            入口和桌面集成：main.cpp / startupdiag（启动诊断）/ tray（托盘）
-src/core/       controller（配置、登录状态）、singleinstance
-src/net/        network（网络检测）、defaultroute（默认路由）、ncsiprobing（NCSI 组策略）
-src/portal/     portalclient（Portal 协议：URL / 请求 / JSONP）、portallogin（登录流程）、autoreconnect（掉线自动重连）、captchaocr（验证码识别）
-src/ui/         systemtheme（深浅色 + 配色）
-qml/            main.qml / Toast.qml / SettingsPage.qml / TestPage.qml（编译进 exe 的 qrc）
-resources/      图标、字体、logo、resources.qrc、windows.rc
-CMakeLists.txt  构建脚本
-BUILD.md        构建、运行、发布说明
-```
+
+系统 API（注册表、UAC、NCSI、路由表）全部集中在 `src/platform/`，
+其它模块只通过 `Platform::` 访问，为以后移植 Linux 留好了边界。
 
 ## 常见问题
 - **双击没反应 / 一闪而过**：多半是发布目录缺 Qt 的 DLL 或 qml 模块。看 exe 同级的 `startup-error.log`，退出码含义见 [BUILD.md](BUILD.md) 第 7 节。

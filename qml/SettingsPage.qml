@@ -304,7 +304,7 @@ Item {
 
                         Column {
                             anchors.left: parent.left
-                            anchors.right: autoStartSwitch.left
+                            anchors.right: autoStartRow.left
                             anchors.rightMargin: 16
                             anchors.verticalCenter: parent.verticalCenter
                             spacing: 5
@@ -317,42 +317,63 @@ Item {
 
                             Text {
                                 width: parent.width
-                                text: "登录 Windows 后自动启动本程序，并立即执行一次校园网认证"
+                                text: "登录系统后自动启动本程序，并立即执行一次校园网认证"
                                 color: settingsPage.subTextColor
                                 font.pixelSize: 11
                                 wrapMode: Text.WordWrap
                             }
                         }
 
-                        Switch {
-                            id: autoStartSwitch
+                        Row {
+                            id: autoStartRow
                             anchors.right: parent.right
                             anchors.verticalCenter: parent.verticalCenter
-                            checked: controller.autoStart
-                            onToggled: {
-                                controller.autoStart = checked;
-                                // 写注册表失败时 Controller 不会改变，这里把开关拨回去
-                                if (checked !== controller.autoStart)
-                                    checked = controller.autoStart;
+                            spacing: 8
+
+                            Item {
+                                width: 18
+                                height: 18
+                                visible: controller.autoStartBusy
+
+                                BusyIndicator {
+                                    anchors.fill: parent
+                                    running: controller.autoStartBusy
+                                }
+                            }
+
+                            Switch {
+                                id: autoStartSwitch
+                                checked: controller.autoStart
+                                // 写注册表在后台线程跑，期间禁用避免连点
+                                enabled: !controller.autoStartBusy
+                                // 程序化同步开关时不要再触发一次写入
+                                property bool syncing: false
+                                onToggled: {
+                                    if (syncing)
+                                        return;
+                                    controller.autoStart = checked;
+                                }
                             }
                         }
                     }
 
+                    // ---- 阻止自动弹出浏览器（NCSI 是 Windows 独有的策略，别的平台没有这一项）----
                     Rectangle {
                         width: parent.width
                         height: 1
+                        visible: controller.supportsBrowserLaunchPolicy
                         color: systemTheme.hoverSoft
                     }
 
-                    // 阻止自动弹出浏览器
                     Item {
                         width: parent.width
                         height: Math.max(64, blockColumn.implicitHeight)
+                        visible: controller.supportsBrowserLaunchPolicy
 
                         Column {
                             id: blockColumn
                             anchors.left: parent.left
-                            anchors.right: blockSwitch.left
+                            anchors.right: blockRow.left
                             anchors.rightMargin: 16
                             anchors.verticalCenter: parent.verticalCenter
                             spacing: 5
@@ -380,40 +401,55 @@ Item {
                                 id: blockHint
                                 width: parent.width
                                 // 有失败原因就直接显示原因，否则按当前状态提示
-                                text: controller.blockAutoBrowserError.length > 0
-                                    ? controller.blockAutoBrowserError
-                                    : (controller.blockAutoBrowser
-                                        ? "已关闭自动拉起浏览器，系统主动探测仍然开启"
-                                        : (controller.isAdmin
-                                            ? "开启后 Windows 不再自动打开认证页面"
-                                            : "开启时会弹出 UAC 提权窗口，点「是」即可写入"))
+                                text: controller.blockAutoBrowserBusy
+                                    ? "正在写入，弹出 UAC 窗口时请点「是」…"
+                                    : (controller.blockAutoBrowserError.length > 0
+                                        ? controller.blockAutoBrowserError
+                                        : (controller.blockAutoBrowser
+                                            ? "已关闭自动拉起浏览器，系统主动探测仍然开启"
+                                            : (controller.isAdmin
+                                                ? "开启后 Windows 不再自动打开认证页面"
+                                                : "开启时会弹出 UAC 提权窗口，点「是」即可写入")))
                                 visible: text.length > 0
-                                color: controller.blockAutoBrowserError.length > 0
-                                    ? "#FFC42B1C"
-                                    : settingsPage.subTextColor
+                                color: controller.blockAutoBrowserBusy
+                                    ? settingsPage.subTextColor
+                                    : (controller.blockAutoBrowserError.length > 0
+                                        ? "#FFC42B1C"
+                                        : settingsPage.subTextColor)
                                 font.pixelSize: 11
                                 wrapMode: Text.WordWrap
                             }
                         }
 
-                        Switch {
-                            id: blockSwitch
+                        Row {
+                            id: blockRow
                             anchors.right: parent.right
                             anchors.verticalCenter: parent.verticalCenter
-                            checked: controller.blockAutoBrowser
-                            // 防止下面把开关拨回去时又触发一次 toggled
-                            property bool applying: false
-                            onToggled: {
-                                if (applying)
-                                    return;
-                                applying = true;
-                                // 没有管理员权限时，Controller 会弹 UAC 起提权小进程去写；
-                                // 失败原因由 blockAutoBrowserError 通知界面
-                                controller.blockAutoBrowser = checked;
-                                // 提权被取消 / 写入失败时把开关拨回去
-                                if (checked !== controller.blockAutoBrowser)
-                                    checked = controller.blockAutoBrowser;
-                                applying = false;
+                            spacing: 8
+
+                            Item {
+                                width: 18
+                                height: 18
+                                visible: controller.blockAutoBrowserBusy
+
+                                BusyIndicator {
+                                    anchors.fill: parent
+                                    running: controller.blockAutoBrowserBusy
+                                }
+                            }
+
+                            Switch {
+                                id: blockSwitch
+                                checked: controller.blockAutoBrowser
+                                // UAC 提权可能要等用户点确认，期间禁用避免连点
+                                enabled: !controller.blockAutoBrowserBusy
+                                property bool syncing: false
+                                onToggled: {
+                                    if (syncing)
+                                        return;
+                                    // 实际写入在后台线程；失败原因由 blockAutoBrowserError 通知界面
+                                    controller.blockAutoBrowser = checked;
+                                }
                             }
                         }
                     }
@@ -474,6 +510,24 @@ Item {
                                 }
                         }
             }
+        }
+    }
+
+    // 两个系统设置的写入都在后台线程完成，结果回来后再把开关同步到真实状态。
+    // 同步时置 syncing 标记，避免又一次触发 onToggled 形成回环
+    Connections {
+        target: controller
+
+        function onAutoStartChanged() {
+            autoStartSwitch.syncing = true;
+            autoStartSwitch.checked = controller.autoStart;
+            autoStartSwitch.syncing = false;
+        }
+
+        function onBlockAutoBrowserChanged() {
+            blockSwitch.syncing = true;
+            blockSwitch.checked = controller.blockAutoBrowser;
+            blockSwitch.syncing = false;
         }
     }
 

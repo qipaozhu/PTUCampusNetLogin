@@ -13,7 +13,7 @@
 
 # ---------------------------- 1. 工程与编译标准 ----------------------------
 cmake_minimum_required(VERSION 3.16)
-set(APP_VERSION 1.0.0)
+set(APP_VERSION 1.1.0)
 project(PTUCampusNetLogin LANGUAGES CXX VERSION ${APP_VERSION})
 
 set(CMAKE_CXX_STANDARD 17)
@@ -47,10 +47,13 @@ file(GLOB_RECURSE SOURCE_FILE CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/app/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 
-# 资源：windows.rc 提供 exe 图标，resources.qrc 提供托盘 / 窗口图标 / 字体
+# 资源：resources.qrc 提供托盘 / 窗口图标 / 字体；
+# windows.rc 只给 Windows 的 exe 提供文件图标，其它平台不需要
 file(GLOB RESOURCE_FILE
-    "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows.rc"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/resources.qrc")
+if(WIN32)
+    list(APPEND RESOURCE_FILE "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows.rc")
+endif()
 
 add_executable(${PROJECT_NAME} ${SOURCE_FILE} ${RESOURCE_FILE})
 
@@ -59,6 +62,11 @@ add_executable(${PROJECT_NAME} ${SOURCE_FILE} ${RESOURCE_FILE})
 target_include_directories(${PROJECT_NAME} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/app"
     "${CMAKE_CURRENT_SOURCE_DIR}/src")
+
+# 把工程版本注入到代码里（PTU_APP_VERSION="1.0.0"），
+# 免得 UA、日志里的版本号和 CMakeLists 里的 APP_VERSION 各写一份、慢慢对不上
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+    PTU_APP_VERSION="${APP_VERSION}")
 
 # ---------------------------- 5. QML 模块 ----------------------------------
 # 界面全部编进 exe 的 qrc（:/mainui/qml/main.qml），运行时不依赖散装的 .qml 文件。
@@ -70,6 +78,7 @@ if(QT_VERSION VERSION_GREATER_EQUAL 6.2)
         QML_FILES
             qml/main.qml
             qml/Toast.qml
+            qml/ToastCenter.qml
             qml/SettingsPage.qml
             qml/TestPage.qml
     )

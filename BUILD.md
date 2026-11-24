@@ -17,26 +17,39 @@
 
 ```
 app/                                                     入口和桌面集成
-  main.cpp                                               只做组装：单实例、引擎、托盘、自启动
+  main.cpp                                               只做组装：单实例、对象、QML、托盘、启动方式
+  appshell.h/.cpp                                        图标 / 字体 / 主窗口访问 / 加载失败提示
   startupdiag.h/.cpp                                     启动失败的日志捕获与 startup-error.log
   tray.h/.cpp                                            系统托盘菜单
+src/platform/                                            ★ 所有平台相关代码（系统头只出现在这里）
+  platform.h/.cpp                                        权限 / 路由表 / 自启动 / 主题 / 提权 / 系统策略
+  winregistry.h/.cpp                                     注册表封装（头文件不暴露 HKEY）
+  ncsiprobing.h/.cpp                                     NCSI 组策略 + UAC 提权小进程
   powerwatcher.h/.cpp                                    监听睡眠恢复消息，醒来立刻检测网络
-src/core/                                                controller（配置 / 登录状态）、singleinstance
-src/net/                                                 network（检测）、defaultroute（Win32 默认路由）、ncsiprobing（NCSI 组策略）
-src/portal/                                              portalclient（协议层：URL / 请求 / JSONP）、portallogin（登录状态机）、autoreconnect（掉线自动重连）、captchaocr（验证码 OCR）
+src/utils/                                               跨平台纯工具（无副作用，可单测）
+  textutils / portaladdress / jsonpresult / captchaimage / applog
+src/net/                                                 network（检测）、lanprobe（默认路由网卡探测）
+src/core/                                                controller（配置与系统设置）、singleinstance、
+                                                         loginstate（状态文案）、startupcoordinator（启动决策）
+src/portal/                                              portalclient（协议层：URL / 请求 / JSONP）、
+                                                         portallogin（登录状态机）、autoreconnect（掉线自动重连）、
+                                                         captchaocr（验证码 OCR）
 src/ui/                                                  systemtheme（深浅色判断 + 整套配色）
-qml/                                                     main.qml / Toast.qml / SettingsPage.qml / TestPage.qml
+qml/                                                     main / SettingsPage / TestPage / Toast / ToastCenter
 resources/                                               app_icon.ico / app_logo.png / font.otf / resources.qrc / windows.rc
 cmake/tesseract.cmake                                    可选的 Tesseract 查找、链接与运行时复制
-CMakeLists.txt                                           构建脚本（按 1~8 小节编号排列）
+CMakeLists.txt                                           构建脚本
 CMakePresets.json                                        Qt 预设
 CMakeUserPresets.json                                    本机 Debug-x64 / Release-x64 预设（含 QTDIR，已忽略）
 vcpkg.json                                               Tesseract 依赖声明
+AGENT.md                                                 项目总览与开发约定（专题文档在 agent/ 下）
 ```
 
 QML 通过 `qt_add_qml_module()` 编进 exe 的 `qrc:/mainui/qml/main.qml`，所以运行时不依赖散装的 `.qml` 文件。
-C++ 头文件统一从 `src/` 根和 `app/` 根开始写（如 `#include "core/controller.h"`、`#include "tray.h"`），
-由 `target_include_directories()` 提供搜索路径，和文件放在哪一层子目录无关。
+C++ 头文件统一从 `src/` 根和 `app/` 根开始写（如 `#include "core/controller.h"`、`#include "tray.h"`、
+`#include "platform/platform.h"`），由 `target_include_directories()` 提供搜索路径，和文件放在哪一层子目录无关。
+源文件由 `file(GLOB_RECURSE ... CONFIGURE_DEPENDS)` 收集，**新增 `.cpp` 不用改 `CMakeLists.txt`**；
+但新增 **QML 文件必须**加进 `QML_FILES`。
 
 ## 3. 配置工程
 

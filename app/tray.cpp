@@ -1,35 +1,16 @@
 #include "tray.h"
 
-#include "core/controller.h"
+#include "portal/portallogin.h"
 
 #include <QAction>
 #include <QCoreApplication>
 #include <QMenu>
 #include <QSystemTrayIcon>
 
-namespace
-{
-	/// 托盘菜单和提示气泡里用的登录状态文案
-	QString loginStateText(int state)
-	{
-		switch (state)
-		{
-		case Controller::LoggingIn:
-			return QStringLiteral("登录中");
-		case Controller::LoggedIn:
-			return QStringLiteral("已登录");
-		case Controller::LoginFailed:
-			return QStringLiteral("登录失败");
-		default:
-			return QStringLiteral("未登录");
-		}
-	}
-}
-
 /// 构造函数：建菜单、接登录状态，并把「打开 / 设置 / 退出」接到回调上
-AppTray::AppTray(const QIcon& icon, Controller* controller, QObject* parent)
+AppTray::AppTray(const QIcon& icon, PortalLogin* portal, QObject* parent)
 	: QObject(parent)
-	, m_controller(controller)
+	, m_portal(portal)
 	, m_menu(new QMenu)
 	, m_tray(new QSystemTrayIcon)
 {
@@ -49,7 +30,7 @@ AppTray::AppTray(const QIcon& icon, Controller* controller, QObject* parent)
 
 	refreshStatus();
 	// 只更新状态，不弹托盘通知气泡：成功 / 失败由 QML 的 Toast 提示
-	connect(m_controller, &Controller::loginStateChanged, this, &AppTray::refreshStatus);
+	connect(m_portal, &PortalLogin::stateChanged, this, &AppTray::refreshStatus);
 
 	connect(openAction, &QAction::triggered, this, [this]()
 		{
@@ -93,7 +74,7 @@ void AppTray::show()
 /// 刷新菜单文字 + 悬浮提示
 void AppTray::refreshStatus()
 {
-	const QString text = loginStateText(m_controller->loginState());
+	const QString text = m_portal->statusText();
 	m_statusAction->setText(QStringLiteral("状态：%1").arg(text));
 	m_tray->setToolTip(QStringLiteral("莆田学院校园网自动登录\n当前状态：%1").arg(text));
 }

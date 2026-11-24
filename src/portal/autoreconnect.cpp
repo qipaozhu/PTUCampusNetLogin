@@ -5,15 +5,12 @@
 
 #include <QTimer>
 
-namespace
-{
-	/// 掉线后先等一会儿：避免网络抖动时来回登录
-	const int kFirstDelayMs = 8000;
-
-	/// 连续失败后的退避间隔，最后一档一直重复
-	const int kRetryDelaysMs[] = { 30000, 60000, 120000, 300000 };
-	const int kRetryDelayCount = 4;
-}
+// 退避节奏：掉线后先等一会儿避免抖动，之后逐档拉长，最后一档一直重复
+/// 掉线后第一次重连的等待时间
+constexpr int kFirstDelayMs = 8000;
+/// 连续失败后的退避间隔
+constexpr int kRetryDelaysMs[] = { 30000, 60000, 120000, 300000 };
+constexpr int kRetryDelayCount = 4;
 
 /// 构造函数：只连信号，不主动发起任何检测
 AutoReconnect::AutoReconnect(Network* network, PortalLogin* portal, QObject* parent)
@@ -80,6 +77,15 @@ void AutoReconnect::onPortalStateChanged()
 		// 用户手动点「登录」失败，交给用户自己决定
 		if (!m_portal->background())
 			return;
+
+		// 「不是本校校园网」这种失败重试多少次都一样，只会一直弹窗骚扰。
+		// 停下来，等网络环境真的变了（换网 / 重新连上）再试一次
+		if (m_portal->pendingManualAuth())
+		{
+			m_failures = 0;
+			m_timer->stop();
+			return;
+		}
 
 		scheduleReconnect(kRetryDelaysMs[qMin(m_failures, kRetryDelayCount - 1)]);
 		++m_failures;

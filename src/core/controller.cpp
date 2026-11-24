@@ -1,62 +1,35 @@
 #include "controller.h"
 
-#include <QAbstractSocket>
+#include "platform/ncsiprobing.h"
+#include "platform/platform.h"
+#include "utils/portaladdress.h"
+
 #include <QByteArray>
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QHostAddress>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QRegularExpression>
+#include <QMetaObject>
+#include <QRunnable>
 #include <QSaveFile>
 #include <QStandardPaths>
 #include <QString>
-#include <QUrl>
 
-#ifdef Q_OS_WIN
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#include <QSettings>
-#endif
-
-#include "net/ncsiprobing.h"
-
-namespace
+namespace ControllerConfig
 {
 	// 开机拉起时带上这个参数，程序据此自动执行一次登录
-	const char* const kAutoStartArg = "--autostart";
+	constexpr const char* kAutoStartArg = "--autostart";
+	// 开机自启动在系统里的登记名
+	constexpr const char* kAutostartName = "PTUCampusLogin";
 
-#ifdef Q_OS_WIN
-	/// 通过进程令牌判断当前进程是否已经提权
-	bool isElevated()
+	/// 系统里登记的自启动命令是否指向当前 exe（程序被移动过就视为未开启）
+	bool isAutostartRegistered()
 	{
-		HANDLE token = nullptr;
-		if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
-			return false;
-
-		TOKEN_ELEVATION elevation = {};
-		DWORD size = static_cast<DWORD>(sizeof(elevation));
-		const BOOL ok = GetTokenInformation(token, TokenElevation, &elevation,
-			sizeof(elevation), &size);
-		CloseHandle(token);
-		return ok && elevation.TokenIsElevated != 0;
-	}
-
-	// 开机自启动写在这里，HKCU 下的 Run 不需要管理员权限
-	const char* const kRunKey =
-		"HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
-	const char* const kRunValue = "PTUCampusLogin";
-
-	/// 注册表里的自启动项是否指向当前 exe（程序被移动过就视为未开启）
-	bool isAutoStartRegistered()
-	{
-		QSettings settings(QString::fromLatin1(kRunKey), QSettings::NativeFormat);
-		const QString command = settings.value(QString::fromLatin1(kRunValue)).toString();
+		const QString command = Platform::autostartCommand(
+			QString::fromLatin1(kAutostartName));
 		if (command.isEmpty())
 			return false;
 
@@ -65,102 +38,41 @@ namespace
 		return command.contains(exePath, Qt::CaseInsensitive)
 			&& command.contains(QString::fromLatin1(kAutoStartArg));
 	}
-#endif
 
-	// Portal 地址的默认端口（eportal 接口；登录接口仍然走 80 端口）
-	const int kDefaultPortalPort = 801;
-
-	/// 解析并校验 "host[:port]"（允许带协议头、路径），成功时输出主机和端口。
-	/// 主机只接受合法的 IPv4 地址或域名，端口缺省为 801。
-	bool parsePortalAddress(const QString& raw, QString* host, int* port)
+	/// 写进注册表的自启动命令（路径带空格必须加引号）
+	QString autostartCommand()
 	{
-		QString address = raw.trimmed();
-		if (address.isEmpty())
-			return false;
-
-		// 去掉协议头，只保留 host[:port]
-		if (address.startsWith(QLatin1String("http://"), Qt::CaseInsensitive))
-			address.remove(0, 7);
-		else if (address.startsWith(QLatin1String("https://"), Qt::CaseInsensitive))
-			address.remove(0, 8);
-
-		// 去掉路径、查询串和锚点
-		const int cut = address.indexOf(QLatin1Char('/'));
-		const int query = address.indexOf(QLatin1Char('?'));
-		const int fragment = address.indexOf(QLatin1Char('#'));
-		int end = address.size();
-		if (cut >= 0)
-			end = qMin(end, cut);
-		if (query >= 0)
-			end = qMin(end, query);
-		if (fragment >= 0)
-			end = qMin(end, fragment);
-		address.truncate(end);
-
-		if (address.isEmpty() || address.endsWith(QLatin1Char(':')))
-			return false;
-
-		// 借 QUrl 拆分主机和端口，顺便校验端口范围
-		const QUrl url(QStringLiteral("http://") + address);
-		if (!url.isValid() || url.host().isEmpty())
-			return false;
-
-		const QString parsedHost = url.host();
-		const int parsedPort = url.port(kDefaultPortalPort);
-		if (parsedPort <= 0 || parsedPort > 65535)
-			return false;
-
-		// 纯数字 / 点号的主机必须是一个合法的 IPv4，其它按域名规则校验
-		static const QRegularExpression numericHost(
-			QStringLiteral("^[0-9.]+$"));
-		static const QRegularExpression domainName(QStringLiteral(
-			"^(?=.{1,253}$)([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)"
-			"(\\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$"));
-
-		if (numericHost.match(parsedHost).hasMatch())
-		{
-			QHostAddress ip;
-			if (!ip.setAddress(parsedHost)
-				|| ip.protocol() != QAbstractSocket::IPv4Protocol)
-			{
-				return false;
-			}
-		}
-		else if (!domainName.match(parsedHost).hasMatch())
-		{
-			return false;
-		}
-
-		if (host)
-			*host = parsedHost;
-		if (port)
-			*port = parsedPort;
-		return true;
+		return QStringLiteral("\"%1\" %2")
+			.arg(QDir::toNativeSeparators(QCoreApplication::applicationFilePath()),
+				QString::fromLatin1(kAutoStartArg));
 	}
 }
 
-/// 构造函数：检测管理员权限，读取开机自启动状态，并加载本地已保存的账号密码
+/// 构造函数：检测管理员权限，读取系统设置并加载本地已保存的账号密码
 Controller::Controller(QObject* parent)
 	: QObject(parent)
 {
-#ifdef Q_OS_WIN
-	m_isAdmin = isElevated();
-#endif
+	// 注册表和 UAC 操作串行执行，一条线程就够
+	m_workPool.setMaxThreadCount(1);
+
+	m_isAdmin = Platform::isElevated();
 
 	// 由开机自启动拉起时命令行带 --autostart，界面据此自动登录
 	m_startedAtBoot = QCoreApplication::arguments().contains(
-		QString::fromLatin1(kAutoStartArg));
+		QString::fromLatin1(ControllerConfig::kAutoStartArg));
 
-#ifdef Q_OS_WIN
-	m_autoStart = isAutoStartRegistered();
-#endif
+	// 两个系统设置的初始值在这里（主线程）读一次，之后都维护缓存
+	m_autoStart = ControllerConfig::isAutostartRegistered();
+	m_blockAutoBrowser = NcsiProbing::isBrowserLaunchBlocked();
 
 	load();
 }
 
-/// 析构函数
+/// 析构：等后台设置操作结束，避免回调打到已经析构的对象上
 Controller::~Controller()
-{}
+{
+	m_workPool.waitForDone();
+}
 
 /// 设置校园网账号，值变化时通知界面刷新
 void Controller::setUsername(const QString& username)
@@ -185,31 +97,20 @@ void Controller::setPassword(const QString& password)
 /// 校验并应用 Portal 地址：只有格式正确才会写入，并同步解析出的 host / port
 bool Controller::applyPortalAddress(const QString& raw)
 {
-	QString host;
-	int port = 0;
-	if (!parsePortalAddress(raw, &host, &port))
+	PortalAddress::Endpoint endpoint;
+	if (!PortalAddress::parse(raw, &endpoint))
 		return false;
 
 	// 统一存成 host:port，方便界面回显和配置文件阅读
-	const QString normalized = QStringLiteral("%1:%2").arg(host).arg(port);
+	const QString normalized = endpoint.toString();
 	if (normalized == m_portalAddress)
 		return true;
 
 	m_portalAddress = normalized;
-	m_portalHost = host;
-	m_portalPort = port;
+	m_portalHost = endpoint.host;
+	m_portalPort = endpoint.port;
 	emit portalAddressChanged();
 	return true;
-}
-
-/// 更新校园网登录状态（未登录 / 登录中 / 成功 / 失败）
-void Controller::setLoginState(int state)
-{
-	if (state == m_loginState)
-		return;
-
-	m_loginState = state;
-	emit loginStateChanged();
 }
 
 /// 返回账号配置文件的完整路径
@@ -220,95 +121,118 @@ QString Controller::configPath() const
 	return QDir(base).filePath(QStringLiteral("Maplekilo/PTUCampusLogin/config.json"));
 }
 
-/// 读取注册表，判断当前是否已禁止系统自动弹出浏览器。
-/// 具体读写都在 NcsiProbing 里，这里只做属性转发
-bool Controller::blockAutoBrowser() const
+/// 当前平台是否支持「阻止系统自动弹出浏览器」
+bool Controller::supportsBrowserLaunchPolicy() const
 {
-	return NcsiProbing::isBrowserLaunchBlocked();
+	return Platform::supportsBrowserLaunchPolicy();
 }
 
-/// 修改注册表：禁止 / 恢复 NCSI 自动拉起浏览器打开认证页。
-/// 目标是 HKLM 下的组策略键（只关"拉浏览器"，不动主动探测）：
-/// 本进程有管理员权限时直接写，否则弹 UAC 起一个提权小进程去写，写完再读注册表确认
+// ============================ 系统设置（异步） ============================
+
+/// 请求修改「阻止自动弹出浏览器」：只是把活儿丢到后台，立刻返回
 void Controller::setBlockAutoBrowser(bool blocked)
 {
-	// 已经是目标状态，不必重复写注册表
-	if (NcsiProbing::isBrowserLaunchBlocked() == blocked)
-	{
-		if (!m_blockAutoBrowserError.isEmpty())
-		{
-			m_blockAutoBrowserError.clear();
-			emit blockAutoBrowserErrorChanged();
-		}
+	// 上一次还没结束，或已经是目标状态，都不必再动
+	if (m_blockAutoBrowserBusy || m_blockAutoBrowser == blocked)
 		return;
-	}
 
-	// 先按当前权限直接写（程序本身是管理员时就不必再弹 UAC）
-	bool written = NcsiProbing::setBrowserLaunchBlocked(blocked);
+	m_blockAutoBrowserBusy = true;
+	emit blockAutoBrowserBusyChanged();
 
-	// 没权限才去提权；用户取消 UAC 会直接返回 false
-	if (!written)
-		written = NcsiProbing::requestElevatedChange(blocked);
-
-	if (written)
-		NcsiProbing::notifySettingsChanged();
-
-	// 失败原因原样传给界面，成功时清空
-	const QString error = written ? QString() : NcsiProbing::lastError();
-	if (error != m_blockAutoBrowserError)
+	// 开始新的一次修改，先把上次的失败原因清掉
+	if (!m_blockAutoBrowserError.isEmpty())
 	{
-		m_blockAutoBrowserError = error;
+		m_blockAutoBrowserError.clear();
 		emit blockAutoBrowserErrorChanged();
 	}
 
-	// 不管成功失败都通知界面，让开关回到注册表里的真实状态
-	emit blockAutoBrowserChanged();
+	applyBlockAutoBrowser(blocked);
 }
 
-/// 开启 / 关闭开机自启动：在 HKCU 的 Run 项里写入带 --autostart 的完整路径
+/// 在后台线程写策略：先按当前权限直接写，写不进去再弹 UAC 起提权小进程。
+/// 提权要等用户点确认（最长 kElevationTimeoutMs），所以绝不能占着主线程
+void Controller::applyBlockAutoBrowser(bool blocked)
+{
+	m_workPool.start(QRunnable::create([this, blocked]()
+		{
+			bool written = NcsiProbing::setBrowserLaunchBlocked(blocked);
+			if (!written)
+				written = NcsiProbing::requestElevatedChange(blocked);
+
+			if (written)
+				Platform::notifyNetworkSettingsChanged();
+
+			// 成功失败都以注册表的实际状态为准
+			const QString error = written ? QString() : NcsiProbing::lastError();
+			const bool actual = NcsiProbing::isBrowserLaunchBlocked();
+
+			QMetaObject::invokeMethod(this, [this, error, actual]()
+				{
+					m_blockAutoBrowser = actual;
+					m_blockAutoBrowserBusy = false;
+					emit blockAutoBrowserBusyChanged();
+
+					if (error != m_blockAutoBrowserError)
+					{
+						m_blockAutoBrowserError = error;
+						emit blockAutoBrowserErrorChanged();
+					}
+
+					// 不管成功失败都通知界面，让开关回到真实状态
+					emit blockAutoBrowserChanged();
+				}, Qt::QueuedConnection);
+		}));
+}
+
+/// 请求修改开机自启动：同样是异步的
 void Controller::setAutoStart(bool enabled)
 {
-#ifdef Q_OS_WIN
-	// 注册表可能被外部改动过，先按实际状态判断，避免无谓的写入
-	if (enabled && isAutoStartRegistered())
-	{
-		if (!m_autoStart)
-		{
-			m_autoStart = true;
-			emit autoStartChanged();
-		}
+	if (m_autoStartBusy || m_autoStart == enabled)
 		return;
-	}
 
-	QSettings settings(QString::fromLatin1(kRunKey), QSettings::NativeFormat);
-	if (enabled)
-	{
-		// 路径带空格必须加引号，否则系统会把路径拆成多个参数
-		const QString command = QStringLiteral("\"%1\" %2")
-			.arg(QDir::toNativeSeparators(QCoreApplication::applicationFilePath()),
-				QString::fromLatin1(kAutoStartArg));
-		settings.setValue(QString::fromLatin1(kRunValue), command);
-	}
-	else
-	{
-		// 关掉时直接清掉，顺便处理程序换过位置的旧值
-		settings.remove(QString::fromLatin1(kRunValue));
-	}
-	settings.sync();
+	m_autoStartBusy = true;
+	emit autoStartBusyChanged();
 
-	// 写失败时保持原状态，通知界面把开关弹回去
-	if (settings.status() != QSettings::NoError)
-	{
-		emit autoStartChanged();
-		return;
-	}
-
-	m_autoStart = enabled;
-	emit autoStartChanged();
-#else
-	Q_UNUSED(enabled)
-#endif
+	applyAutoStart(enabled);
 }
+
+/// 在后台线程写 / 删自启动项
+void Controller::applyAutoStart(bool enabled)
+{
+	m_workPool.start(QRunnable::create([this, enabled]()
+		{
+			const QString name = QString::fromLatin1(ControllerConfig::kAutostartName);
+
+			bool written = false;
+			if (enabled)
+			{
+				// 系统里的状态可能被外部改动过，先按实际状态判断，避免无谓的写入
+				written = ControllerConfig::isAutostartRegistered()
+					|| Platform::setAutostart(name, ControllerConfig::autostartCommand(), nullptr);
+			}
+			else
+			{
+				written = Platform::removeAutostart(name, nullptr);
+			}
+
+			// 以系统里的实际状态为准：写失败时这个值仍是原来的
+			const bool actual = ControllerConfig::isAutostartRegistered();
+
+			QMetaObject::invokeMethod(this, [this, written, actual]()
+				{
+					m_autoStartBusy = false;
+					emit autoStartBusyChanged();
+
+					// 写失败就保持原值，界面会把开关拨回去
+					if (written)
+						m_autoStart = actual;
+
+					emit autoStartChanged();
+				}, Qt::QueuedConnection);
+		}));
+}
+
+// ============================ 配置读写 ============================
 
 /// 把当前账号密码写入 JSON 配置文件
 bool Controller::save()

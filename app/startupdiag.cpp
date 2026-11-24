@@ -4,37 +4,42 @@
 #include <QDir>
 #include <QFile>
 
-namespace
+namespace StartupDiagState
 {
-	QStringList g_startupMessages;
-	QtMessageHandler g_previousMessageHandler = nullptr;
+	/// 启动阶段收集到的警告 / 错误
+	QStringList messages;
+	/// 之前安装的消息处理器，卸载时要还原回去
+	QtMessageHandler previousHandler = nullptr;
 
-	void captureMessages(QtMsgType type, const QMessageLogContext& context, const QString& message)
+	/// 拦截日志：只挑警告及以上级别的留下来，然后继续交给上一个处理器
+	void captureMessages(QtMsgType type, const QMessageLogContext& context,
+		const QString& message)
 	{
 		if (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg)
-			g_startupMessages.append(message);
+			messages.append(message);
 
-		if (g_previousMessageHandler)
-			g_previousMessageHandler(type, context, message);
+		if (previousHandler)
+			previousHandler(type, context, message);
 	}
 }
 
 /// 安装消息处理器，开始收集警告 / 错误
 void installStartupDiagnostics()
 {
-	g_previousMessageHandler = qInstallMessageHandler(captureMessages);
+	StartupDiagState::previousHandler = qInstallMessageHandler(
+		StartupDiagState::captureMessages);
 }
 
 /// 还原之前的消息处理器
 void uninstallStartupDiagnostics()
 {
-	qInstallMessageHandler(g_previousMessageHandler);
+	qInstallMessageHandler(StartupDiagState::previousHandler);
 }
 
 /// 已收集到的启动消息
 QStringList startupDiagnostics()
 {
-	return g_startupMessages;
+	return StartupDiagState::messages;
 }
 
 /// 把失败详情写到 exe 同目录（不可写时退回临时目录），返回最终路径

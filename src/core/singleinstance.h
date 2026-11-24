@@ -24,6 +24,10 @@ signals:
 	void showRequested();
 
 private:
+	/// 尝试连接已有实例并发送"显示主界面"请求，成功返回 true
+	static bool notifyExistingInstance(const QString& key);
+
+	/// 有新实例连入：读掉它的请求并发出 showRequested
 	void handleNewConnection();
 
 	QString m_key;

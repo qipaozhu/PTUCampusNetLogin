@@ -27,134 +27,56 @@ ApplicationWindow {
 
     // 0 = 主页，1 = 设置
     property int currentPage: 0
-    // 启动后的第一次联网检测是否已经处理过
-    property bool startupOnlineChecked: false
 
     color: root.bgColor
 
-    // 网络状态由 C++ 的 Network 每 30 秒后台检测一次，开机自启动的自动登录也由 C++ 拉起，
-    // QML 这里只负责显示
-    // ---------------- 登录状态文案 / 配色 ----------------
-    function loginStateText(state) {
-        if (state === 1)
-            return "登录中";
-        if (state === 2)
-            return "登录成功";
-        if (state === 3)
-            return "登录失败";
-        return "未登录";
-    }
-
-    function loginStateColor(state) {
-        if (state === 2)
+    // ---------------- 登录状态配色 ----------------
+    // 状态的语义（叫什么、该显示什么文案）全在 C++ 的 PortalLogin 里，
+    // QML 只按 statusKind 决定颜色，不再写状态数字
+    function loginStateColor(kind) {
+        if (kind === "loggedIn")
             return "#FF107C10";
-        if (state === 3)
+        if (kind === "failed")
             return "#FFC42B1C";
-        if (state === 1)
+        if (kind === "loggingIn")
             return root.accentColor;
         return root.subTextColor;
     }
 
-    function loginStateBg(state) {
-        if (state === 2)
+    function loginStateBg(kind) {
+        if (kind === "loggedIn")
             return "#26107C10";
-        if (state === 3)
+        if (kind === "failed")
             return "#26C42B1C";
-        if (state === 1)
+        if (kind === "loggingIn")
             return root.accentSoft;
         return root.hoverSoft;
     }
 
-    function loginStateHint(state) {
-        if (state === 2)
+    function loginStateHint(kind) {
+        if (kind === "loggedIn")
             return "已通过校园网认证";
-        if (state === 3)
+        if (kind === "failed")
             return "认证失败，请检查账号密码后重试";
-        if (state === 1)
+        if (kind === "loggingIn")
             return "正在提交认证请求";
         return "尚未完成校园网认证";
     }
 
-    // ---------------- 临时预览 toast ----------------
-    property var toastComponent: null
-    property var toastWindow: null
-
-    function showToast(status) {
-        if (!toastComponent) {
-            toastComponent = Qt.createComponent(Qt.resolvedUrl("Toast.qml"));
-        }
-        if (toastComponent.status !== Component.Ready) {
-            console.warn("Toast.qml 加载失败:", toastComponent.errorString());
-            return;
-        }
-
-        if (!toastWindow) {
-            toastWindow = toastComponent.createObject(null);
-            // toast 是独立窗口，自己销毁会留下悬空引用，交给 root 统一关闭
-            if (toastWindow) {
-                toastWindow.closeRequested.connect(root.hideToast);
-                // 退出动画播完后 toast 会发 dismissed，这时才真正销毁
-                toastWindow.dismissed.connect(root.destroyToast);
-            }
-        }
-        if (toastWindow) {
-            // present() 负责刷新状态、show()、raise() 和入场动画
-            toastWindow.present(status);
-            // 成功的提示短一些，失败/处理中留足时间
-            hideTimer.interval = status === "success" ? 3500 : 7000;
-            hideTimer.restart();
-        }
+    // ---------------- Toast ----------------
+    // 窗口生命周期和显示逻辑都在 ToastCenter.qml 里；
+    // 什么状态该弹什么 Toast 由 C++ 决定，这里只负责显示
+    ToastCenter {
+        id: toastCenter
     }
 
-    // 开始隐藏：先播右滑退出动画，动画结束后由 destroyToast() 销毁
-    function hideToast() {
-        hideTimer.stop();
-        if (toastWindow)
-            toastWindow.dismiss();
-    }
-
-    function destroyToast() {
-        hideTimer.stop();
-        if (toastWindow) {
-            toastWindow.close();
-            toastWindow.destroy();
-            toastWindow = null;
-        }
-    }
-
-    Timer {
-        id: hideTimer
-        interval: 10000
-        onTriggered: root.hideToast()
-    }
-
-    // 自动登录时联动 toast：处理中 / 失败 / 成功后收起。
-    // 后台自动重连也算一次登录操作，同样会弹 Toast
     Connections {
         target: portal
-        function onStateChanged() {
-            if (portal.state === 1) {
-                root.showToast("processing");
-            } else if (portal.state === 8) {
-                root.showToast("failed");
-            } else if (portal.state === 7) {
-                root.showToast("success");
-            } else if (portal.state === 0) {
-                root.hideToast();
-            }
-        }
-    }
-
-    // 启动后第一次网络检测：如果本来就已经能上网，说明之前已经登录过（含手动登录）
-    Connections {
-        target: network
-        function onOnlineChecked(online) {
-            if (root.startupOnlineChecked)
-                return;
-            root.startupOnlineChecked = true;
-
-            if (online && !portal.running && controller.loginState === 0)
-                portal.detectExistingSession();
+        function onToastRequested(kind) {
+            if (kind === "hide")
+                toastCenter.hide();
+            else if (kind.length > 0)
+                toastCenter.show(kind);
         }
     }
 
@@ -214,18 +136,23 @@ ApplicationWindow {
 
                 Repeater {
                     model: [
-                        { title: "主页" },
-                        { title: "设置" },
-                        //{ title: "测试" } // 测试页面正式版不用
+                        {
+                            title: "主页"
+                        },
+                        {
+                            title: "设置"
+                        },
+                        // 发布前想隐藏测试页，把这一行注释掉即可
+                        //{
+                        //    title: "测试"
+                        //}
                     ]
 
                     delegate: Rectangle {
                         width: parent.width
                         height: 40
                         radius: 6
-                        color: root.currentPage === index
-                            ? root.accentSoft
-                            : (navMouse.containsMouse ? root.hoverSoft : "transparent")
+                        color: root.currentPage === index ? root.accentSoft : (navMouse.containsMouse ? root.hoverSoft : "transparent")
 
                         Text {
                             anchors.left: parent.left
@@ -412,9 +339,7 @@ ApplicationWindow {
                                     width: parent.width - x
                                     height: 28
                                     verticalAlignment: Text.AlignVCenter
-                                    text: network.lanDescription.length > 0
-                                        ? network.lanDescription
-                                        : "未发现活动网卡"
+                                    text: network.lanDescription.length > 0 ? network.lanDescription : "未发现活动网卡"
                                     color: root.subTextColor
                                     font.pixelSize: 12
                                     elide: Text.ElideRight
@@ -472,12 +397,12 @@ ApplicationWindow {
                                     width: 80
                                     height: 24
                                     radius: 12
-                                    color: root.loginStateBg(controller.loginState)
+                                    color: root.loginStateBg(portal.statusKind)
 
                                     Text {
                                         anchors.centerIn: parent
-                                        text: root.loginStateText(controller.loginState)
-                                        color: root.loginStateColor(controller.loginState)
+                                        text: portal.statusText
+                                        color: root.loginStateColor(portal.statusKind)
                                         font.pixelSize: 12
                                     }
                                 }
@@ -487,9 +412,7 @@ ApplicationWindow {
                                     width: parent.width - x
                                     height: 28
                                     verticalAlignment: Text.AlignVCenter
-                                    text: portal.message.length > 0
-                                        ? portal.message
-                                        : root.loginStateHint(controller.loginState)
+                                    text: portal.message.length > 0 ? portal.message : root.loginStateHint(portal.statusKind)
                                     color: root.subTextColor
                                     font.pixelSize: 12
                                     elide: Text.ElideRight
@@ -506,9 +429,22 @@ ApplicationWindow {
                                     spacing: 10
 
                                     Button {
-                                        text: "重新检测"
+                                        text: network.checking ? "检测中…" : "重新检测"
                                         font.family: appFontFamily
+                                        enabled: !network.checking
                                         onClicked: network.refresh()
+                                    }
+
+                                    // 检测中：转个圈，光靠按钮文字看不出还在动
+                                    Item {
+                                        width: 20
+                                        height: 20
+                                        visible: network.checking
+
+                                        BusyIndicator {
+                                            anchors.fill: parent
+                                            running: network.checking
+                                        }
                                     }
                                 }
                             }
@@ -570,7 +506,7 @@ ApplicationWindow {
                                 Button {
                                     text: "已手动登录"
                                     font.family: appFontFamily
-                                    enabled: !portal.running && controller.loginState !== 2
+                                    enabled: !portal.running && portal.statusKind !== "loggedIn"
                                     onClicked: portal.markManuallyLoggedIn()
                                 }
                             }
@@ -589,7 +525,13 @@ ApplicationWindow {
             TestPage {
                 anchors.fill: parent
                 visible: root.currentPage === 2
-                onShowToastRequested: function (status) { root.showToast(status); }
+                onShowToastRequested: function (status) {
+                    toastCenter.show(status);
+                }
+                onHideToastRequested: toastCenter.hide()
+                onShowToastWithMessageRequested: function (status, message) {
+                    toastCenter.show(status, message);
+                }
             }
         }
     }
@@ -633,27 +575,25 @@ ApplicationWindow {
                 font.pixelSize: 13
                 wrapMode: Text.WordWrap
             }
-
-            
         }
 
         footer: Row {
-                spacing: 20
+            spacing: 20
 
-                Button {
-                    text: "取消"
-                    font.family: appFontFamily
-                    onClicked: logoutDialog.close()
-                }
+            Button {
+                text: "取消"
+                font.family: appFontFamily
+                onClicked: logoutDialog.close()
+            }
 
-                Button {
-                    text: "确定"
-                    font.family: appFontFamily
-                    onClicked: {
-                        logoutDialog.close();
-                        portal.logout();
-                    }
+            Button {
+                text: "确定"
+                font.family: appFontFamily
+                onClicked: {
+                    logoutDialog.close();
+                    portal.logout();
                 }
             }
+        }
     }
 }

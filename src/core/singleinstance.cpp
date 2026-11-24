@@ -4,27 +4,12 @@
 #include <QLocalServer>
 #include <QLocalSocket>
 
-namespace
+namespace SingleInstanceConfig
 {
 	/// 第二个实例最多等这么久来连上已有实例
-	const int kConnectTimeoutMs = 300;
-	/// 连上后发送的请求内容，目前只用“显示主界面”这一种
-	const char kShowCommand[] = "show";
-
-	/// 尝试连接已有实例并发送“显示主界面”请求，成功返回 true
-	bool notifyExistingInstance(const QString& key)
-	{
-		QLocalSocket socket;
-		socket.connectToServer(key);
-		if (!socket.waitForConnected(kConnectTimeoutMs))
-			return false;
-
-		socket.write(kShowCommand);
-		socket.flush();
-		socket.waitForBytesWritten(kConnectTimeoutMs);
-		socket.disconnectFromServer();
-		return true;
-	}
+	constexpr int kConnectTimeoutMs = 300;
+	/// 连上后发送的请求内容，目前只用"显示主界面"这一种
+	constexpr const char* kShowCommand = "show";
 }
 
 /// 构造函数：先尝试连接已有实例，连不上再自己监听
@@ -68,6 +53,21 @@ SingleInstance::~SingleInstance()
 		m_server->close();
 }
 
+/// 尝试连接已有实例并发送"显示主界面"请求
+bool SingleInstance::notifyExistingInstance(const QString& key)
+{
+	QLocalSocket socket;
+	socket.connectToServer(key);
+	if (!socket.waitForConnected(SingleInstanceConfig::kConnectTimeoutMs))
+		return false;
+
+	socket.write(SingleInstanceConfig::kShowCommand);
+	socket.flush();
+	socket.waitForBytesWritten(SingleInstanceConfig::kConnectTimeoutMs);
+	socket.disconnectFromServer();
+	return true;
+}
+
 /// 有新实例连入：读取请求并通知界面显示
 void SingleInstance::handleNewConnection()
 {
@@ -78,7 +78,7 @@ void SingleInstance::handleNewConnection()
 	{
 		connect(socket, &QLocalSocket::disconnected, socket, &QLocalSocket::deleteLater);
 
-		// 请求内容目前不用区分，连接上就视为“显示主界面”
+		// 请求内容目前不用区分，连接上就视为"显示主界面"
 		socket->readAll();
 		emit showRequested();
 	}

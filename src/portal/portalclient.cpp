@@ -1,11 +1,9 @@
 #include "portalclient.h"
 
 #include "core/controller.h"
+#include "utils/jsonpresult.h"
 
 #include <QDateTime>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QJsonParseError>
 #include <QNetworkAccessManager>
 #include <QNetworkCookieJar>
 #include <QNetworkProxy>
@@ -14,7 +12,7 @@
 
 #include <utility>
 
-namespace
+namespace PortalClientConfig
 {
 	/// 校园网 Portal 用的浏览器 UA
 	const char* const kUserAgent =
@@ -22,63 +20,40 @@ namespace
 		"AppleWebKit/537.36 (KHTML, like Gecko) "
 		"Chrome/120.0.0.0 Safari/537.36";
 
-	const int kRequestTimeoutMs = 8000;
+	constexpr int kRequestTimeoutMs = 8000;
+}
 
+namespace PortalClientRequest
+{
 	/// 构建请求：固定 UA、强制走网络、带上超时
-	QNetworkRequest buildRequest(const QUrl& url)
+	QNetworkRequest build(const QUrl& url)
 	{
 		QNetworkRequest request(url);
 		request.setAttribute(QNetworkRequest::CacheLoadControlAttribute,
 			QNetworkRequest::AlwaysNetwork);
 		request.setHeader(QNetworkRequest::UserAgentHeader,
-			QString::fromLatin1(kUserAgent));
+			QString::fromLatin1(PortalClientConfig::kUserAgent));
 #if QT_VERSION >= QT_VERSION_CHECK(6, 7, 0)
-		request.setTransferTimeout(kRequestTimeoutMs);
+		request.setTransferTimeout(PortalClientConfig::kRequestTimeoutMs);
 #endif
 		return request;
 	}
+}
 
-	/// 解析 JSONP / JSON：result == "1" 视为成功，msga / msg 为错误信息
-	bool parseJsonp(const QByteArray& body, QString* message)
-	{
-		const QString text = QString::fromUtf8(body).trimmed();
-		if (text.isEmpty())
-			return false;
-
-		const int start = text.indexOf(QLatin1Char('{'));
-		const int end = text.lastIndexOf(QLatin1Char('}'));
-		if (start < 0 || end <= start)
-			return false;
-
-		QJsonParseError error{};
-		const QJsonDocument document = QJsonDocument::fromJson(
-			text.mid(start, end - start + 1).toUtf8(), &error);
-		if (error.error != QJsonParseError::NoError || !document.isObject())
-			return false;
-
-		const QJsonObject object = document.object();
-		if (message)
-		{
-			*message = object.value(QStringLiteral("msga")).toString();
-			if (message->isEmpty())
-				*message = object.value(QStringLiteral("msg")).toString();
-		}
-		return object.value(QStringLiteral("result")).toVariant().toString()
-			== QLatin1String("1");
-	}
-
+namespace PortalClientResult
+{
 	/// 把接口返回体解析成业务结果
-	PortalClient::Result parseResult(const PortalClient::Response& response)
+	PortalClient::Result fromResponse(const PortalClient::Response& response)
 	{
 		PortalClient::Result result;
-		if (response.ok())
-			result.ok = parseJsonp(response.body, &result.message);
+		result.ok = JsonpResult::parseResponse(response.transportOk(), response.status,
+			response.body, &result.message);
 		return result;
 	}
 }
 
 /// 构造函数：门户在校内网，必须直连（不走系统代理）；
-/// eportal 用 Cookie 关联“取码 / 校验 / 登录”的会话，所以要自己带 CookieJar
+/// eportal 用 Cookie 关联"取码 / 校验 / 登录"的会话，所以要自己带 CookieJar
 PortalClient::PortalClient(Controller* controller, QObject* parent)
 	: QObject(parent)
 	, m_controller(controller)
@@ -117,14 +92,14 @@ void PortalClient::fetchCaptcha(std::function<void(const QImage&, const QString&
 					Qt::CaseInsensitive)
 				|| response.body.isEmpty())
 			{
-				callback(QImage(), QStringLiteral("获取验证码失败，需要手动登录"));
+				callback(QImage(), QStringLiteral("获取验证码失败，请手动登录"));
 				return;
 			}
 
 			const QImage image = QImage::fromData(response.body);
 			if (image.isNull())
 			{
-				callback(QImage(), QStringLiteral("验证码图片无法解析，需要手动登录"));
+				callback(QImage(), QStringLiteral("验证码图片无法解析，请手动登录"));
 				return;
 			}
 
@@ -149,7 +124,7 @@ void PortalClient::checkCaptcha(const QString& text,
 
 	get(url, [callback = std::move(callback)](const Response& response)
 		{
-			callback(parseResult(response));
+			callback(PortalClientResult::fromResponse(response));
 		});
 }
 
@@ -177,14 +152,14 @@ void PortalClient::login(const QString& username, const QString& password,
 	// 注意：URL 里带密码，不能写日志
 	get(url, [callback = std::move(callback)](const Response& response)
 		{
-			callback(parseResult(response));
+			callback(PortalClientResult::fromResponse(response));
 		});
 }
 
 /// 注销：暂时不可用
 void PortalClient::logout(std::function<void(const Response&)> callback)
 {
-
+	Q_UNUSED(callback)
 }
 
 /// 统一的 GET：先取消上一个请求，再发新的
@@ -192,7 +167,7 @@ void PortalClient::get(const QUrl& url, std::function<void(const Response&)> han
 {
 	abort();
 
-	QNetworkReply* reply = m_manager->get(buildRequest(url));
+	QNetworkReply* reply = m_manager->get(PortalClientRequest::build(url));
 	m_reply = reply;
 
 	connect(reply, &QNetworkReply::finished, this,

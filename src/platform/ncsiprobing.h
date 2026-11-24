@@ -3,7 +3,7 @@
 #include <QString>
 #include <QStringList>
 
-/// NCSI（网络连接状态指示器）策略的注册表读写。
+/// NCSI（网络连接状态指示器）策略的读写。
 ///
 /// Windows 连上"需要认证"的网络时会自动拉起浏览器打开认证页，这个行为由 NCSI 决定。
 /// 这里用组策略值 NoWebBrowserLaunch 只关掉"拉浏览器"这一件事，**不动主动探测**：
@@ -14,6 +14,8 @@
 /// 键在 HKLM 下，普通权限写不进去，所以没有管理员权限时用 ShellExecuteEx(runas)
 /// 起一个提权的小进程（还是本程序的 exe，带 --apply-ncsi-policy=0|1），
 /// 由它写好注册表后立刻退出，主进程不创建第二套界面。
+///
+/// 这是 Windows 独有的功能：其它平台上所有函数都只是降级返回失败，不会崩。
 namespace NcsiProbing
 {
 	/// 本进程是不是被当作"提权写注册表"的小进程拉起
@@ -35,6 +37,6 @@ namespace NcsiProbing
 	/// 最近一次修改失败的原因（给界面显示）；成功后为空
 	QString lastError();
 
-	/// 通知系统网络设置已经变化（WinINet 刷新 + WM_SETTINGCHANGE 广播）
+	/// 通知系统网络设置已经变化
 	void notifySettingsChanged();
 }

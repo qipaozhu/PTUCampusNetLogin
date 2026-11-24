@@ -1,9 +1,12 @@
 #include <winresrc.h>
 #pragma code_page(65001)
+
+// 注意：下面的版本号是手写的，改版本时要和 CMakeLists.txt 的 APP_VERSION 一起改。
+// 代码里（UA 等）用的是 CMake 注入的 PTU_APP_VERSION，不会自动同步到这里。
 IDI_ICON1               ICON                    "app_icon.ico"
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1, 0, 0, 0
+ FILEVERSION 1, 1, 0, 0
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS VS_FF_DEBUG
@@ -19,11 +22,11 @@ BEGIN
         BLOCK "080404b0"
         BEGIN
             VALUE "CompanyName", "Maplekilo"
-            VALUE "FileDescription", "莆田学院校园网自动登录，方便、快捷。"
+            VALUE "FileDescription", "莆田学院校园网自动登录程序"
             VALUE "InternalName", "PTUCampusNetLogin"
             VALUE "LegalCopyright", "Copyright (C) 2026 Maplekilo"
             VALUE "ProductName", "莆田学院校园网自动登录程序"
-            VALUE "ProductVersion", "1.0.0"
+            VALUE "ProductVersion", "1.1.0"
         END
     END
     BLOCK "VarFileInfo"
